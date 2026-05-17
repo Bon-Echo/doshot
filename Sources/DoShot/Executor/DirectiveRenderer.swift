@@ -28,13 +28,20 @@ enum DirectiveRenderer {
         } catch {
             throw RenderError.readFailed(underlying: error)
         }
+        // Placeholders are UPPERCASE per the directive author's contract.
+        // DEFAULT_CHANNEL is the human-readable "#name" form; the corresponding
+        // channel id reaches the directive via env (`$DOSHOT_SLACK_DEFAULT_CHANNEL`).
+        let defaultChannelDisplay: String = {
+            let name = settings.slackDefaultChannelName.trimmingCharacters(in: .whitespaces)
+            if name.isEmpty { return "" }
+            return name.hasPrefix("#") ? name : "#" + name
+        }()
         let substitutions: [String: String] = [
-            "instruction": instruction,
-            "screenshot_path": screenshotPath,
-            "desktop_root": settings.desktopRoot,
-            "slack_token_present": settings.slackToken.isEmpty ? "false" : "true",
-            "slack_default_channel_id": settings.slackDefaultChannelId,
-            "slack_default_channel_name": settings.slackDefaultChannelName
+            "INSTRUCTION": instruction,
+            "SCREENSHOT_PATH": screenshotPath,
+            "DESKTOP_ROOT": settings.desktopRoot,
+            "SLACK_TOKEN_PRESENT": settings.slackToken.isEmpty ? "no" : "yes",
+            "DEFAULT_CHANNEL": defaultChannelDisplay
         ]
         return apply(substitutions: substitutions, to: template)
     }
