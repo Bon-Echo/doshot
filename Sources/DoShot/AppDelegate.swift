@@ -61,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
                 try runStore.writeMeta(runDir: runDir, instruction: nil)
+                copyCaptureToPasteboard(imageURL: imageURL)
                 showModal(runDir: runDir, imageURL: imageURL)
             } catch {
                 notifications.postError(error: .unknown(message: error.localizedDescription), runId: "—")
@@ -127,6 +128,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let trusted = AXIsProcessTrusted()
         menuBar.setAccessibilityWarning(visible: !trusted)
         settings.accessibilityGranted = trusted
+    }
+
+    /// Mirror macOS's built-in screenshot "Copy" behavior: put the captured
+    /// PNG on the system pasteboard so the user can `⌘V` it anywhere
+    /// immediately, in addition to running the DoShot action.
+    private func copyCaptureToPasteboard(imageURL: URL) {
+        guard let data = try? Data(contentsOf: imageURL),
+              let image = NSImage(data: data) else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        // Write both the NSImage (for receivers that want a typed image) and
+        // the raw PNG bytes (for receivers that key on data type).
+        pb.writeObjects([image])
+        pb.setData(data, forType: .png)
     }
 
     private func revealInFinder(path: String) {
