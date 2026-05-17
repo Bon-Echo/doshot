@@ -19,8 +19,11 @@ struct ModalView: View {
                 .padding(.top, 16)
                 .padding(.bottom, 16)
         }
-        .frame(width: 440)
-        .frame(minHeight: 460, maxHeight: 560, alignment: .top)
+        // Size matches ModalWindowController.modalSize so the SwiftUI content
+        // and the NSWindow frame stay in lock-step.
+        .frame(width: ModalWindowController.modalSize.width,
+               height: ModalWindowController.modalSize.height,
+               alignment: .top)
         .onAppear {
             instructionFocused = true
             withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true)) {

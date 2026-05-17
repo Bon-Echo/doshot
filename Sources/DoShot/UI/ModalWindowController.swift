@@ -3,6 +3,9 @@ import SwiftUI
 
 @MainActor
 final class ModalWindowController {
+    /// Single source of truth for modal dimensions. Match in ModalView's `.frame(...)`.
+    static let modalSize = NSSize(width: 440, height: 500)
+
     private let window: NSWindow
     private let state: RunState
     private let executor: ClaudeExecutor
@@ -11,7 +14,7 @@ final class ModalWindowController {
         self.state = RunState(runDir: runDir, imageURL: imageURL)
         self.executor = ClaudeExecutor(settings: settings, notifications: notifications)
 
-        let frame = NSRect(x: 0, y: 0, width: 420, height: 480)
+        let frame = NSRect(origin: .zero, size: Self.modalSize)
         // Pure .borderless — combining .borderless with .titled produced a
         // phantom title bar that threw off positioning math and let the modal
         // open off-screen on some setups. The window's own Cancel button + ⌘W
@@ -28,6 +31,9 @@ final class ModalWindowController {
         win.backgroundColor = .clear
         win.isOpaque = false
         win.hasShadow = true
+        // Defeat macOS window restoration so an old (buggy) saved position
+        // can't follow the user across builds.
+        win.isRestorable = false
         self.window = win
 
         let view = ModalView(
@@ -48,6 +54,13 @@ final class ModalWindowController {
         positionBottomRight()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        // Re-assert position on the next run-loop tick: NSHostingController
+        // can adjust the window's frame after first display based on the
+        // SwiftUI intrinsic size, which would otherwise push the right edge
+        // past the screen.
+        DispatchQueue.main.async { [weak self] in
+            self?.positionBottomRight()
+        }
     }
 
     func bringToFront() {
@@ -63,15 +76,20 @@ final class ModalWindowController {
         let screen = NSScreen.screenContainingMouse() ?? NSScreen.main
         guard let visible = screen?.visibleFrame else { return }
         let inset: CGFloat = 24
-        let size = window.frame.size
+        // Use the constant size rather than `window.frame.size` — the latter
+        // can return the initial contentRect before NSHostingController has
+        // laid out, OR a post-layout grown size — either way it's an unreliable
+        // basis for "bottom-right minus inset". Use the canonical size and let
+        // the SwiftUI content match.
+        let size = Self.modalSize
         var x = visible.maxX - size.width - inset
         var y = visible.minY + inset
-        // Clamp inside the visible frame so multi-monitor edge cases or a
-        // stale frame.size can't push the modal partially off-screen
-        // (the "stuck on the right" bug).
+        // Clamp inside the visible frame as a belt-and-suspenders safety net.
         x = max(visible.minX + inset, min(x, visible.maxX - size.width - inset))
         y = max(visible.minY + inset, min(y, visible.maxY - size.height - inset))
-        window.setFrameOrigin(NSPoint(x: x, y: y))
+        // Force the full frame (origin + size) so a post-layout resize can't
+        // grow the window past the visible edge.
+        window.setFrame(NSRect(origin: NSPoint(x: x, y: y), size: size), display: true)
     }
 
     private func run(instruction: String) {
