@@ -1,0 +1,114 @@
+name: Build, notarize, release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - '.github/ISSUE_TEMPLATE/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build + notarize + release
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Read app version
+        id: version
+        run: |
+          v=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' AppBundle/Info.plist)
+          tag="v${v}-build.${{ github.run_number }}"
+          echo "app_version=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "App version: $v  Tag: $tag"
+
+      - name: Import Developer ID cert into ephemeral keychain
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          KC_PATH="$RUNNER_TEMP/build.keychain-db"
+          echo "$BUILD_CERTIFICATE_BASE64" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KC_PATH"
+          security set-keychain-settings -lut 21600 "$KC_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KC_PATH"
+          security import "$CERT_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KC_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KC_PATH"
+          # Prepend build keychain to the user search list so codesign + notarytool find it.
+          existing=$(security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//' | tr '\n' ' ')
+          security list-keychains -d user -s "$KC_PATH" $existing
+          security find-identity -v -p codesigning "$KC_PATH"
+          rm -f "$CERT_PATH"
+          echo "BUILD_KEYCHAIN=$KC_PATH" >> "$GITHUB_ENV"
+
+      - name: Store notarytool credentials
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcrun notarytool store-credentials AC_PASSWORD \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --keychain "$BUILD_KEYCHAIN"
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Build .app (sign with Developer ID + hardened runtime)
+        run: bash Scripts/build-app.sh
+
+      - name: Build DMG
+        run: bash Scripts/dmg.sh
+
+      - name: Notarize + staple .app and DMG
+        run: bash Scripts/notarize.sh
+
+      - name: Rename DMG to stable asset name
+        run: |
+          src="dist/DoShot-${{ steps.version.outputs.app_version }}.dmg"
+          cp "$src" "dist/DoShot.dmg"
+          ls -lah dist/
+
+      - name: Verify notarization
+        run: |
+          spctl -a -t open --context context:primary-signature -vvv dist/DoShot.dmg
+          xcrun stapler validate dist/DoShot.app
+          xcrun stapler validate dist/DoShot.dmg
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --target "${{ github.sha }}" \
+            --title "DoShot ${{ steps.version.outputs.app_version }} (build ${{ github.run_number }})" \
+            --notes "Auto-built from ${{ github.sha }}." \
+            --latest \
+            "dist/DoShot.dmg#DoShot — signed & notarized .dmg"
+
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          security delete-keychain "$BUILD_KEYCHAIN" || true
