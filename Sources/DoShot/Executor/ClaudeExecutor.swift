@@ -40,7 +40,13 @@ final class ClaudeExecutor {
             "-p", directive,
             "--output-format", "stream-json",
             "--verbose",
-            "--permission-mode", "acceptEdits"
+            // Headless one-shot executor: no interactive approval, so we bypass all
+            // permission prompts. Guardrails come from the directive prompt (cwd +
+            // $DOSHOT_DESKTOP_ROOT only) and the per-run timeout — not from
+            // interactive approval. `acceptEdits` alone only auto-approves file
+            // writes, leaving Bash/curl blocked, which breaks both Save and Slack
+            // actions in v1.
+            "--dangerously-skip-permissions"
         ]
         process.currentDirectoryURL = state.runDir
 
@@ -83,6 +89,7 @@ final class ClaudeExecutor {
 
         let stdoutHandle = stdoutPipe.fileHandleForReading
         let parser = StreamJsonParser()
+        let accumulator = TranscriptAccumulator()
 
         // Capture strongly into the task so Swift 6 sees no re-assignable captures.
         let weakState = state
@@ -92,6 +99,7 @@ final class ClaudeExecutor {
                 while process.isRunning || stdoutHandle.availableData.count > 0 {
                     let chunk = stdoutHandle.availableData
                     if chunk.isEmpty { break }
+                    accumulator.append(chunk)
                     guard let str = String(data: chunk, encoding: .utf8) else { continue }
                     let events = parser.feed(str)
                     for event in events {
@@ -109,6 +117,19 @@ final class ClaudeExecutor {
 
         timeoutTask.cancel()
 
+        // Always persist the full stream-json transcript + stderr to the run dir,
+        // regardless of exit path. This is the forensic surface for debugging
+        // failed runs (no transcript = no way to see what Claude tried to do).
+        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        let remaining = stdoutHandle.readDataToEndOfFile()
+        if !remaining.isEmpty { accumulator.append(remaining) }
+        try? accumulator.data.write(to: state.runDir.appendingPathComponent("transcript.jsonl"))
+        if !stderrData.isEmpty {
+            try? stderrData.write(to: state.runDir.appendingPathComponent("stderr.txt"))
+        }
+        let stderrText = String(data: stderrData, encoding: .utf8) ?? ""
+        let tailText = String(data: remaining, encoding: .utf8) ?? ""
+
         if timedOut {
             let err = RunError.claudeTimeout
             notifications.postError(error: err, runId: state.runDir.lastPathComponent)
@@ -117,20 +138,10 @@ final class ClaudeExecutor {
         }
 
         let exitCode = process.terminationStatus
-        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-        let stderrText = String(data: stderrData, encoding: .utf8) ?? ""
-        let remaining = stdoutHandle.readDataToEndOfFile()
-        let tailText = String(data: remaining, encoding: .utf8) ?? ""
 
-        // Read result.json from the run dir.
         let resultURL = state.runDir.appendingPathComponent("result.json")
         if exitCode == 0, let data = try? Data(contentsOf: resultURL),
            let result = try? JSONDecoder().decode(RunResult.self, from: data) {
-            if !tailText.isEmpty {
-                try? tailText.write(
-                    to: state.runDir.appendingPathComponent("transcript.jsonl"),
-                    atomically: true, encoding: .utf8)
-            }
             notifications.postSuccess(result: result)
             phaseSink(.done(result))
             return
@@ -156,4 +167,13 @@ final class ClaudeExecutor {
             state.append(TranscriptLine(kind: .error, text: text))
         }
     }
+}
+
+/// Append-only stdout accumulator shared between the streaming task and the
+/// post-stream forensic write. Single-writer-then-single-reader by construction
+/// (TaskGroup's `waitForAll` establishes happens-before), so the unchecked
+/// Sendable conformance is safe.
+private final class TranscriptAccumulator: @unchecked Sendable {
+    private(set) var data = Data()
+    func append(_ chunk: Data) { data.append(chunk) }
 }
