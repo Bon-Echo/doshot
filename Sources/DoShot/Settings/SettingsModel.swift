@@ -64,11 +64,30 @@ final class SettingsModel: ObservableObject {
     }
 
     static func whichClaude() -> String? {
+        // GUI-launched macOS apps inherit launchd's stripped PATH (no ~/.local/bin,
+        // /opt/homebrew/bin, etc.). Run the user's login shell so .zshrc/.bashrc
+        // PATH exports take effect, then fall back to probing known install paths.
+        if let path = runLoginShell(command: "command -v claude"),
+           FileManager.default.isExecutableFile(atPath: path) {
+            return path
+        }
+        let candidates = [
+            "/opt/homebrew/bin/claude",
+            "/usr/local/bin/claude",
+            NSString(string: "~/.local/bin/claude").expandingTildeInPath,
+            NSString(string: "~/bin/claude").expandingTildeInPath
+        ]
+        return candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) })
+    }
+
+    private static func runLoginShell(command: String) -> String? {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["which", "claude"]
-        // Use the user's login PATH; `env` itself doesn't expand $PATH from a custom shell.
-        process.environment = ProcessInfo.processInfo.environment
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        process.executableURL = URL(fileURLWithPath: shell)
+        // -l = login shell (sources .zprofile/.profile), -i = interactive (sources .zshrc),
+        // -c = run one command. Yes, we eat the cost of sourcing rc files on every detect;
+        // it runs at app launch + Re-check button only, so the overhead is fine.
+        process.arguments = ["-lic", command]
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = Pipe()
@@ -80,8 +99,11 @@ final class SettingsModel: ObservableObject {
         }
         guard process.terminationStatus == 0 else { return nil }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return path.isEmpty ? nil : path
+        let trimmed = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // Some rc files emit chatter; take only the last non-empty line.
+        let lastLine = trimmed.split(separator: "\n").map(String.init).last(where: { !$0.isEmpty }) ?? ""
+        return lastLine.isEmpty ? nil : lastLine
     }
 
     private enum K {
