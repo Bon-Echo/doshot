@@ -36,6 +36,11 @@ mkdir -p "${APP_DIR}/Contents/MacOS"
 mkdir -p "${APP_DIR}/Contents/Resources"
 cp "$BIN_PATH" "${APP_DIR}/Contents/MacOS/${BIN_NAME}"
 cp AppBundle/Info.plist "${APP_DIR}/Contents/Info.plist"
+if [[ -f AppBundle/AppIcon.icns ]]; then
+  cp AppBundle/AppIcon.icns "${APP_DIR}/Contents/Resources/AppIcon.icns"
+else
+  echo "WARN: AppBundle/AppIcon.icns missing — run Scripts/build-icon.sh to regenerate." >&2
+fi
 
 # Copy the SwiftPM-generated resource bundle (DoShot_DoShot.bundle) into Resources.
 BIN_DIR="$(dirname "$BIN_PATH")"
