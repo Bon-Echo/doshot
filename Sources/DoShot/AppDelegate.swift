@@ -46,7 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         refreshAccessibilityState()
         accessibilityPollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshAccessibilityState() }
+            Task { @MainActor [weak self] in self?.refreshAccessibilityState() }
         }
     }
 
