@@ -1,0 +1,14 @@
+.DS_Store
+.build/
+.swiftpm/
+Packages/
+*.xcodeproj
+*.xcworkspace
+build/
+Build/
+dist/
+DoShot.app/
+*.dmg
+.vscode/
+xcuserdata/
+*.xcuserstate

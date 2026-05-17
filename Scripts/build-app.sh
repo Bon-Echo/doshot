@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Build DoShot.app from the SwiftPM executable target.
+#
+# - Compiles a Release binary via `swift build`
+# - Wraps it in a proper macOS `.app` bundle structure
+# - Copies Info.plist and bundled resources (KeyboardShortcuts strings, directive.md)
+# - Ad-hoc codesigns (so first-launch warnings are about Gatekeeper origin, not unsigned exec)
+#
+# Output: dist/DoShot.app
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+APP_NAME="DoShot"
+APP_DIR="dist/${APP_NAME}.app"
+BIN_NAME="DoShot"
+ARCH=$(uname -m)
+
+echo "==> Cleaning previous build…"
+rm -rf "$APP_DIR"
+
+echo "==> swift build -c release…"
+swift build -c release --arch arm64 --arch x86_64
+
+# Find the universal binary.
+BIN_PATH="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/${BIN_NAME}"
+if [[ ! -f "$BIN_PATH" ]]; then
+  echo "Binary not found at $BIN_PATH" >&2
+  exit 1
+fi
+
+echo "==> Assembling ${APP_DIR}…"
+mkdir -p "${APP_DIR}/Contents/MacOS"
+mkdir -p "${APP_DIR}/Contents/Resources"
+cp "$BIN_PATH" "${APP_DIR}/Contents/MacOS/${BIN_NAME}"
+cp AppBundle/Info.plist "${APP_DIR}/Contents/Info.plist"
+
+# Copy the SwiftPM-generated resource bundle (DoShot_DoShot.bundle) into Resources.
+BIN_DIR="$(dirname "$BIN_PATH")"
+if compgen -G "${BIN_DIR}/${BIN_NAME}_${BIN_NAME}.bundle" > /dev/null; then
+  cp -R "${BIN_DIR}/${BIN_NAME}_${BIN_NAME}.bundle" "${APP_DIR}/Contents/Resources/"
+fi
+
+# Copy KeyboardShortcuts localized strings bundle if produced.
+for b in "${BIN_DIR}"/*.bundle; do
+  [[ -e "$b" ]] || continue
+  cp -R "$b" "${APP_DIR}/Contents/Resources/"
+done
+
+echo "==> Ad-hoc codesigning…"
+codesign --force --deep --sign - "${APP_DIR}"
+
+echo "==> Done: ${APP_DIR}"
+echo "    Right-click → Open on first launch to bypass Gatekeeper (unsigned)."
