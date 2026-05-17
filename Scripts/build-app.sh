@@ -4,7 +4,9 @@
 # - Compiles a Release binary via `swift build`
 # - Wraps it in a proper macOS `.app` bundle structure
 # - Copies Info.plist and bundled resources (KeyboardShortcuts strings, directive.md)
-# - Ad-hoc codesigns (so first-launch warnings are about Gatekeeper origin, not unsigned exec)
+# - Codesigns with Developer ID + hardened runtime when CODESIGN_IDENTITY is set
+#   (or auto-discovered from the keychain); falls back to ad-hoc otherwise.
+#   Hardened runtime is required for notarization — see Scripts/notarize.sh.
 #
 # Output: dist/DoShot.app
 
@@ -54,8 +56,29 @@ for b in "${BIN_DIR}"/*.bundle; do
   cp -R "$b" "${APP_DIR}/Contents/Resources/"
 done
 
-echo "==> Ad-hoc codesigning…"
-codesign --force --deep --sign - "${APP_DIR}"
+# Pick a signing identity: explicit override > Developer ID from keychain > ad-hoc.
+if [[ -z "${CODESIGN_IDENTITY:-}" ]]; then
+  CODESIGN_IDENTITY="$(security find-identity -v -p codesigning | awk -F'"' '/Developer ID Application/ { print $2; exit }' || true)"
+fi
+ENTITLEMENTS="AppBundle/DoShot.entitlements"
 
-echo "==> Done: ${APP_DIR}"
-echo "    Right-click → Open on first launch to bypass Gatekeeper (unsigned)."
+if [[ -n "${CODESIGN_IDENTITY}" && -f "${ENTITLEMENTS}" ]]; then
+  echo "==> Codesigning with Developer ID + hardened runtime…"
+  echo "    Identity: ${CODESIGN_IDENTITY}"
+  # Sign the inner binary first, then the bundle. --deep is deprecated for
+  # release signing; signing nested resources explicitly avoids the warning.
+  codesign --force --options runtime --timestamp \
+    --entitlements "${ENTITLEMENTS}" \
+    --sign "${CODESIGN_IDENTITY}" \
+    "${APP_DIR}/Contents/MacOS/${BIN_NAME}"
+  codesign --force --options runtime --timestamp \
+    --entitlements "${ENTITLEMENTS}" \
+    --sign "${CODESIGN_IDENTITY}" \
+    "${APP_DIR}"
+  echo "==> Done: ${APP_DIR} (signed, ready for Scripts/notarize.sh)"
+else
+  echo "==> No Developer ID identity found — ad-hoc codesigning…"
+  codesign --force --deep --sign - "${APP_DIR}"
+  echo "==> Done: ${APP_DIR}"
+  echo "    Right-click → Open on first launch to bypass Gatekeeper (unsigned)."
+fi

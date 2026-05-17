@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Package dist/DoShot.app into an unsigned DMG via `create-dmg`.
+# Package dist/DoShot.app into a DMG via `create-dmg`.
 # Install create-dmg: `brew install create-dmg`.
+#
+# This step itself does not codesign or notarize the DMG — Scripts/notarize.sh
+# orchestrates the full flow (sign .app → notarize .app → staple .app →
+# rebuild DMG → sign DMG → notarize DMG → staple DMG).
 #
 # Output: dist/DoShot-<version>.dmg
 
@@ -41,4 +45,4 @@ create-dmg \
   "$APP_DIR"
 
 echo "==> Done: $DMG_PATH"
-echo "    DMG is unsigned — first launch requires right-click → Open."
+echo "    Next: Scripts/notarize.sh to sign + notarize + staple."

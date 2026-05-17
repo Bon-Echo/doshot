@@ -12,13 +12,11 @@ DoShot is a macOS menu-bar app (no Dock icon). You press the hotkey, drag-select
 
 ## Install (DMG)
 
-DoShot ships as an **unsigned** DMG. macOS Gatekeeper will block the first launch.
+DoShot ships as a **signed + notarized** DMG (Developer ID: Labeeb Khan, Team `33L6SC5Z5J`). Gatekeeper accepts it on first launch — no right-click → Open dance required.
 
 1. Open `DoShot-<version>.dmg` and drag `DoShot.app` into `Applications`.
-2. In Finder, **right-click `DoShot.app` → Open**, then click **Open** in the dialog. Double-clicking will NOT work the first time.
+2. Double-click `DoShot.app`.
 3. Grant Accessibility permission when prompted (or in Onboarding card 3).
-
-After the first right-click → Open, subsequent launches work normally.
 
 ## Onboarding
 
@@ -60,7 +58,8 @@ DoShot uses your existing Claude Code auth — calls bill against your Claude su
 Requires Xcode 15+ and `brew install create-dmg`.
 
 ```bash
-# Build the .app bundle
+# Build the .app bundle (signs with Developer ID if available in keychain,
+# otherwise falls back to ad-hoc)
 bash Scripts/build-app.sh
 
 # Open the .app to test
@@ -68,6 +67,19 @@ open dist/DoShot.app
 
 # Package into a DMG
 bash Scripts/dmg.sh
+
+# Notarize + staple .app and .dmg (requires Developer ID signature and a
+# notarytool keychain profile named AC_PASSWORD)
+bash Scripts/notarize.sh
+```
+
+### One-time notarization setup
+
+```bash
+xcrun notarytool store-credentials AC_PASSWORD \
+  --apple-id <your-apple-id> \
+  --team-id 33L6SC5Z5J \
+  --password <app-specific-password-from-appleid.apple.com>
 ```
 
 For day-to-day development, open `Package.swift` in Xcode — SPM packages are first-class. Press `⌘R` to build & run.
@@ -88,7 +100,7 @@ If something looks wrong, this is where to look first.
 - **Hotkey does nothing** → Accessibility permission is not granted. Settings → Accessibility → re-grant.
 - **`claude` CLI not found** → Set an explicit path in Settings → Advanced → Claude binary.
 - **Slack action fails** → Bot isn't a member of the channel. `/invite @YourBot` in that channel.
-- **First launch refuses to open** → Right-click → Open (not double-click). This is Gatekeeper on unsigned apps.
+- **First launch refuses to open** → Should not happen on the signed/notarized DMG; if it does, the ticket may have been stripped. Try `xattr -dr com.apple.quarantine /Applications/DoShot.app`.
 
 ## License
 
